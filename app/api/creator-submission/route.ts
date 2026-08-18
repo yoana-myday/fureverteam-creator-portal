@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import nodemailer from "nodemailer";
 import { addSubmission, CreatorSubmission, VideoSubmissionItem } from "@/lib/submission-store";
+import { nextInvoiceNumber } from "@/lib/invoice-sequence";
 
 type SubmissionBody = {
   country?: string;
@@ -20,6 +21,8 @@ type SubmissionBody = {
   city?: string;
   state?: string;
   postalCode?: string;
+  invoiceNumber?: string;
+  invoiceDate?: string;
   videoItems?: Array<{
     url?: string;
     platform?: string;
@@ -103,6 +106,8 @@ export async function POST(request: Request) {
       }));
 
     const invoiceTotal = normalizedVideos.reduce((sum, item) => sum + item.amount, 0);
+    const generatedInvoiceMeta =
+      body.invoiceNumber && body.invoiceDate ? null : await nextInvoiceNumber(new Date());
     const submissionRecord: CreatorSubmission = {
       id: `sub-${Date.now()}`,
       createdAt: new Date().toISOString(),
@@ -123,6 +128,8 @@ export async function POST(request: Request) {
       city: body.city ?? "",
       state: body.state ?? "",
       postalCode: body.postalCode ?? "",
+      invoiceNumber: body.invoiceNumber ?? generatedInvoiceMeta?.invoiceNumber ?? "",
+      invoiceDate: body.invoiceDate ?? generatedInvoiceMeta?.dateText ?? "",
       invoiceStatus: "pending",
       videos: normalizedVideos,
       invoiceTotal,
@@ -189,7 +196,16 @@ export async function POST(request: Request) {
       );
     }
 
-    return NextResponse.json({ ok: true, queuedForApproval: true, emailSent: true }, { status: 200 });
+    return NextResponse.json(
+      {
+        ok: true,
+        queuedForApproval: true,
+        emailSent: true,
+        submissionId: submissionRecord.id,
+        invoiceNumber: submissionRecord.invoiceNumber,
+      },
+      { status: 200 },
+    );
   } catch (error) {
     console.error("creator-submission route failed:", error);
     return NextResponse.json({ error: "Unexpected server error." }, { status: 500 });

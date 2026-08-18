@@ -1,8 +1,6 @@
 import { createPool, sql as defaultSql } from "@vercel/postgres";
 
 type SqlLike = typeof defaultSql;
-const HARDCODED_FALLBACK_CONNECTION =
-  "postgresql://neondb_owner:npg_hrfHCbqZB8t3@ep-dry-tree-aqxv1bqs-pooler.c-8.us-east-1.aws.neon.tech/neondb?channel_binding=require&sslmode=require";
 
 const globalDbClient = globalThis as typeof globalThis & {
   __fureverScopedSql?: SqlLike;
@@ -40,7 +38,6 @@ function getDirectConnectionString(): string | null {
     process.env.POSTGRES_URL ||
     process.env.POSTGRES_URL_NON_POOLING ||
     process.env.DATABASE_URL ||
-    HARDCODED_FALLBACK_CONNECTION ||
     null
   );
 }

@@ -1,7 +1,7 @@
 import { dbSql as sql } from "@/lib/db-client";
 import { getAdminSql } from "@/lib/db-admin-client";
 
-export type InvoiceStatus = "pending" | "approved" | "paid";
+export type InvoiceStatus = "pending" | "approved" | "declined" | "paid";
 
 export type VideoSubmissionItem = {
   id: string;
@@ -33,8 +33,11 @@ export type CreatorSubmission = {
   city: string;
   state: string;
   postalCode: string;
+  invoiceNumber: string;
+  invoiceDate: string;
   invoiceStatus: InvoiceStatus;
   approvedAt?: string;
+  declinedAt?: string;
   paidAt?: string;
   videos: VideoSubmissionItem[];
   invoiceTotal: number;
@@ -60,8 +63,11 @@ type SubmissionRow = {
   city: string;
   state: string;
   postal_code: string;
+  invoice_number: string;
+  invoice_date: string;
   invoice_status: InvoiceStatus;
   approved_at: Date | string | null;
+  declined_at: Date | string | null;
   paid_at: Date | string | null;
   invoice_total: string | number;
   videos_json: unknown;
@@ -130,8 +136,11 @@ async function ensureSubmissionTable(): Promise<void> {
           city TEXT NOT NULL,
           state TEXT NOT NULL,
           postal_code TEXT NOT NULL,
+          invoice_number TEXT NOT NULL DEFAULT '',
+          invoice_date TEXT NOT NULL DEFAULT '',
           invoice_status TEXT NOT NULL,
           approved_at TIMESTAMPTZ NULL,
+          declined_at TIMESTAMPTZ NULL,
           paid_at TIMESTAMPTZ NULL,
           invoice_total NUMERIC(12, 2) NOT NULL,
           videos_json JSONB NOT NULL
@@ -140,6 +149,18 @@ async function ensureSubmissionTable(): Promise<void> {
       await ddlSql`
         ALTER TABLE creator_submissions
         ADD COLUMN IF NOT EXISTS bank_country TEXT NOT NULL DEFAULT ''
+      `;
+      await ddlSql`
+        ALTER TABLE creator_submissions
+        ADD COLUMN IF NOT EXISTS invoice_number TEXT NOT NULL DEFAULT ''
+      `;
+      await ddlSql`
+        ALTER TABLE creator_submissions
+        ADD COLUMN IF NOT EXISTS invoice_date TEXT NOT NULL DEFAULT ''
+      `;
+      await ddlSql`
+        ALTER TABLE creator_submissions
+        ADD COLUMN IF NOT EXISTS declined_at TIMESTAMPTZ NULL
       `;
       await ddlSql`
         CREATE INDEX IF NOT EXISTS creator_submissions_created_at_idx
@@ -195,8 +216,11 @@ function mapRowToSubmission(row: SubmissionRow): CreatorSubmission {
     city: row.city,
     state: row.state,
     postalCode: row.postal_code,
+    invoiceNumber: row.invoice_number,
+    invoiceDate: row.invoice_date,
     invoiceStatus: row.invoice_status,
     approvedAt: toIso(row.approved_at),
+    declinedAt: toIso(row.declined_at),
     paidAt: toIso(row.paid_at),
     invoiceTotal: Number(row.invoice_total),
     videos: parseVideos(row.videos_json),
@@ -231,8 +255,11 @@ export async function getAllSubmissions(): Promise<CreatorSubmission[]> {
       city,
       state,
       postal_code,
+      invoice_number,
+      invoice_date,
       invoice_status,
       approved_at,
+      declined_at,
       paid_at,
       invoice_total,
       videos_json
@@ -269,8 +296,11 @@ export async function addSubmission(submission: CreatorSubmission): Promise<void
       city,
       state,
       postal_code,
+      invoice_number,
+      invoice_date,
       invoice_status,
       approved_at,
+      declined_at,
       paid_at,
       invoice_total,
       videos_json
@@ -295,8 +325,11 @@ export async function addSubmission(submission: CreatorSubmission): Promise<void
       ${submission.city},
       ${submission.state},
       ${submission.postalCode},
+      ${submission.invoiceNumber},
+      ${submission.invoiceDate},
       ${submission.invoiceStatus},
       ${submission.approvedAt ?? null},
+      ${submission.declinedAt ?? null},
       ${submission.paidAt ?? null},
       ${submission.invoiceTotal},
       ${JSON.stringify(submission.videos)}
@@ -316,18 +349,27 @@ export async function updateSubmissionStatus(
     target.invoiceStatus = nextStatus;
     if (nextStatus === "approved") {
       target.approvedAt = new Date().toISOString();
+      target.declinedAt = undefined;
       target.paidAt = undefined;
       target.videos = target.videos.map((video) => ({ ...video, approved: true }));
+    }
+    if (nextStatus === "declined") {
+      target.approvedAt = undefined;
+      target.declinedAt = new Date().toISOString();
+      target.paidAt = undefined;
+      target.videos = target.videos.map((video) => ({ ...video, approved: false }));
     }
     if (nextStatus === "paid") {
       if (!target.approvedAt) {
         target.approvedAt = new Date().toISOString();
       }
+      target.declinedAt = undefined;
       target.paidAt = new Date().toISOString();
       target.videos = target.videos.map((video) => ({ ...video, approved: true }));
     }
     if (nextStatus === "pending") {
       target.approvedAt = undefined;
+      target.declinedAt = undefined;
       target.paidAt = undefined;
       target.videos = target.videos.map((video) => ({ ...video, approved: false }));
     }
@@ -355,8 +397,11 @@ export async function updateSubmissionStatus(
       city,
       state,
       postal_code,
+      invoice_number,
+      invoice_date,
       invoice_status,
       approved_at,
+      declined_at,
       paid_at,
       invoice_total,
       videos_json
@@ -372,17 +417,27 @@ export async function updateSubmissionStatus(
   existing.invoiceStatus = nextStatus;
   if (nextStatus === "approved") {
     existing.approvedAt = new Date().toISOString();
+    existing.declinedAt = undefined;
+    existing.paidAt = undefined;
     existing.videos = existing.videos.map((video) => ({ ...video, approved: true }));
+  }
+  if (nextStatus === "declined") {
+    existing.approvedAt = undefined;
+    existing.declinedAt = new Date().toISOString();
+    existing.paidAt = undefined;
+    existing.videos = existing.videos.map((video) => ({ ...video, approved: false }));
   }
   if (nextStatus === "paid") {
     if (!existing.approvedAt) {
       existing.approvedAt = new Date().toISOString();
     }
+    existing.declinedAt = undefined;
     existing.videos = existing.videos.map((video) => ({ ...video, approved: true }));
     existing.paidAt = new Date().toISOString();
   }
   if (nextStatus === "pending") {
     existing.approvedAt = undefined;
+    existing.declinedAt = undefined;
     existing.paidAt = undefined;
     existing.videos = existing.videos.map((video) => ({ ...video, approved: false }));
   }
@@ -392,6 +447,7 @@ export async function updateSubmissionStatus(
     SET
       invoice_status = ${existing.invoiceStatus},
       approved_at = ${existing.approvedAt ?? null},
+      declined_at = ${existing.declinedAt ?? null},
       paid_at = ${existing.paidAt ?? null},
       videos_json = ${JSON.stringify(existing.videos)}
     WHERE id = ${id}

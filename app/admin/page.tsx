@@ -1,8 +1,9 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import type { CreatorSubmission, InvoiceStatus } from "@/lib/submission-store";
+import { createInvoicePdfBlob, getInvoiceFileName } from "@/lib/invoice-pdf";
 
 type AdminResponse = {
   submissions: CreatorSubmission[];
@@ -16,12 +17,42 @@ function formatMoney(amount: number): string {
   return `$${amount.toFixed(2)}`;
 }
 
+function getStoredInvoiceMeta(item: CreatorSubmission): {
+  invoiceNumber: string;
+  invoiceDate: string;
+} {
+  const createdDate = new Date(item.createdAt);
+  const year = createdDate.getFullYear();
+  const month = String(createdDate.getMonth() + 1).padStart(2, "0");
+  const day = String(createdDate.getDate()).padStart(2, "0");
+  const fallbackSerial = item.id.replace(/\D/g, "").slice(-2).padStart(2, "0") || "01";
+  return {
+    invoiceNumber: item.invoiceNumber || `INV-${year}${month}${day}-${fallbackSerial}`,
+    invoiceDate: item.invoiceDate || `${year}-${month}-${day}`,
+  };
+}
+
 export default function AdminPage() {
   const [code, setCode] = useState("");
   const [authed, setAuthed] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
   const [data, setData] = useState<AdminResponse | null>(null);
+  const [preparingInvoiceId, setPreparingInvoiceId] = useState("");
+  const [invoicePreview, setInvoicePreview] = useState<{
+    submissionId: string;
+    url: string;
+    fileName: string;
+    invoiceNumber: string;
+  } | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (invoicePreview?.url) {
+        URL.revokeObjectURL(invoicePreview.url);
+      }
+    };
+  }, [invoicePreview]);
 
   const fetchData = async (adminCode: string): Promise<boolean> => {
     setLoading(true);
@@ -55,6 +86,9 @@ export default function AdminPage() {
 
   const updateStatus = async (id: string, status: InvoiceStatus) => {
     if (!authed) return;
+    if (status === "declined" && !window.confirm("Decline this invoice?")) {
+      return;
+    }
     setLoading(true);
     try {
       const response = await fetch(`/api/admin/submissions/${id}`, {
@@ -75,11 +109,63 @@ export default function AdminPage() {
     }
   };
 
+  const viewInvoice = async (item: CreatorSubmission) => {
+    setPreparingInvoiceId(item.id);
+    setError("");
+    try {
+      const meta = getStoredInvoiceMeta(item);
+      const blob = await createInvoicePdfBlob({
+        invoiceNumber: meta.invoiceNumber,
+        invoiceDate: meta.invoiceDate,
+        fullName: item.fullName,
+        creatorEmail: item.creatorEmail,
+        bankName: item.bankName,
+        bankCountry: item.bankCountry,
+        routingNumber: item.routingNumber,
+        swiftCode: item.swiftCode,
+        accountNumber: item.accountNumber,
+        legalCountry: item.legalCountry,
+        addressLine1: item.addressLine1,
+        addressLine2: item.addressLine2,
+        city: item.city,
+        state: item.state,
+        postalCode: item.postalCode,
+        videos: item.videos.map((video) => ({
+          platform: video.platform,
+          amount: video.amount,
+        })),
+      });
+      const nextUrl = URL.createObjectURL(blob);
+      setInvoicePreview((previous) => {
+        if (previous?.url) {
+          URL.revokeObjectURL(previous.url);
+        }
+        return {
+          submissionId: item.id,
+          url: nextUrl,
+          fileName: getInvoiceFileName(item.fullName, meta.invoiceNumber),
+          invoiceNumber: meta.invoiceNumber,
+        };
+      });
+      window.requestAnimationFrame(() => {
+        document.getElementById("admin-invoice-preview")?.scrollIntoView({
+          behavior: "smooth",
+          block: "start",
+        });
+      });
+    } catch {
+      setError("Failed to prepare invoice PDF.");
+    } finally {
+      setPreparingInvoiceId("");
+    }
+  };
+
   const groups = useMemo(() => {
     const submissions = data?.submissions ?? [];
     return {
       pending: submissions.filter((item) => item.invoiceStatus === "pending"),
       approved: submissions.filter((item) => item.invoiceStatus === "approved"),
+      declined: submissions.filter((item) => item.invoiceStatus === "declined"),
       paid: submissions.filter((item) => item.invoiceStatus === "paid"),
     };
   }, [data]);
@@ -133,6 +219,33 @@ export default function AdminPage() {
       {error && <p className="error-text">{error}</p>}
       {loading && <p className="helper-text">Syncing...</p>}
 
+      {invoicePreview && (
+        <section id="admin-invoice-preview" className="admin-section admin-invoice-preview">
+          <div className="submission-top">
+            <div>
+              <strong>Invoice Preview</strong> <span>({invoicePreview.invoiceNumber})</span>
+            </div>
+            <button
+              type="button"
+              className="secondary-btn"
+              onClick={() => setInvoicePreview(null)}
+            >
+              Close Preview
+            </button>
+          </div>
+          <iframe
+            className="pdf-preview-frame"
+            src={invoicePreview.url}
+            title={`Invoice ${invoicePreview.invoiceNumber}`}
+          />
+          <div className="actions">
+            <a className="admin-primary-btn" href={invoicePreview.url} download={invoicePreview.fileName}>
+              Download PDF
+            </a>
+          </div>
+        </section>
+      )}
+
       <section className="admin-section">
         <h2>Pending Approval Invoices</h2>
         {groups.pending.length === 0 ? (
@@ -157,8 +270,23 @@ export default function AdminPage() {
                 ))}
               </ul>
               <div className="actions">
+                <button
+                  type="button"
+                  className="secondary-btn"
+                  onClick={() => void viewInvoice(item)}
+                  disabled={preparingInvoiceId === item.id}
+                >
+                  {preparingInvoiceId === item.id ? "Preparing Invoice..." : "View / Download Invoice"}
+                </button>
                 <button type="button" onClick={() => void updateStatus(item.id, "approved")}>
                   Approve Invoice
+                </button>
+                <button
+                  type="button"
+                  className="danger-btn"
+                  onClick={() => void updateStatus(item.id, "declined")}
+                >
+                  Decline Invoice
                 </button>
               </div>
             </article>
@@ -190,8 +318,57 @@ export default function AdminPage() {
                 ))}
               </ul>
               <div className="actions">
+                <button
+                  type="button"
+                  className="secondary-btn"
+                  onClick={() => void viewInvoice(item)}
+                  disabled={preparingInvoiceId === item.id}
+                >
+                  {preparingInvoiceId === item.id ? "Preparing Invoice..." : "View / Download Invoice"}
+                </button>
                 <button type="button" onClick={() => void updateStatus(item.id, "paid")}>
                   Mark Payment Success
+                </button>
+              </div>
+            </article>
+          ))
+        )}
+      </section>
+
+      <section className="admin-section">
+        <h2>Declined Invoices</h2>
+        {groups.declined.length === 0 ? (
+          <p className="helper-text">No declined invoices.</p>
+        ) : (
+          groups.declined.map((item) => (
+            <article key={item.id} className="submission-card submission-card-declined">
+              <div className="submission-top">
+                <div>
+                  <strong>{item.fullName}</strong> <span>({item.creatorEmail})</span>
+                </div>
+                <div>{formatMoney(item.invoiceTotal)}</div>
+              </div>
+              <ul className="video-list">
+                {item.videos.map((video) => (
+                  <li key={video.id}>
+                    <span>{video.platform}</span>
+                    <span>{video.campaignTag || "-"}</span>
+                    <span>{formatMoney(video.amount)}</span>
+                    <span>Declined</span>
+                  </li>
+                ))}
+              </ul>
+              <div className="actions">
+                <button
+                  type="button"
+                  className="secondary-btn"
+                  onClick={() => void viewInvoice(item)}
+                  disabled={preparingInvoiceId === item.id}
+                >
+                  {preparingInvoiceId === item.id ? "Preparing Invoice..." : "View / Download Invoice"}
+                </button>
+                <button type="button" onClick={() => void updateStatus(item.id, "pending")}>
+                  Return to Pending
                 </button>
               </div>
             </article>
@@ -222,6 +399,16 @@ export default function AdminPage() {
                   </li>
                 ))}
               </ul>
+              <div className="actions">
+                <button
+                  type="button"
+                  className="secondary-btn"
+                  onClick={() => void viewInvoice(item)}
+                  disabled={preparingInvoiceId === item.id}
+                >
+                  {preparingInvoiceId === item.id ? "Preparing Invoice..." : "View / Download Invoice"}
+                </button>
+              </div>
             </article>
           ))
         )}

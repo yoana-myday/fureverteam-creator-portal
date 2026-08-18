@@ -3,7 +3,7 @@
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import Image from "next/image";
 import Link from "next/link";
-import { PDFDocument, StandardFonts } from "pdf-lib";
+import { createInvoicePdfBlob, getInvoiceFileName } from "@/lib/invoice-pdf";
 
 type FormStep = "country" | "links" | "details" | "preview";
 
@@ -394,6 +394,9 @@ export default function Home() {
   const [isSubmittingInvoice, setIsSubmittingInvoice] = useState<boolean>(false);
   const [isPreparingPreviewPdf, setIsPreparingPreviewPdf] = useState<boolean>(false);
   const [previewPdfUrl, setPreviewPdfUrl] = useState<string>("");
+  const [invoiceMeta, setInvoiceMeta] = useState<{ invoiceNumber: string; invoiceDate: string } | null>(
+    null,
+  );
   const [countryQuery, setCountryQuery] = useState<string>("");
   const [bankCountryQuery, setBankCountryQuery] = useState<string>("United States");
   const [legalCountryQuery, setLegalCountryQuery] = useState<string>("United States");
@@ -680,10 +683,9 @@ export default function Home() {
   };
 
   const downloadPdfFromUrl = (blobUrl: string) => {
-    const safeName = (formData.fullName || "creator").replace(/\s+/g, "-").toLowerCase();
     const link = document.createElement("a");
     link.href = blobUrl;
-    link.download = `invoice-${safeName}.pdf`;
+    link.download = getInvoiceFileName(formData.fullName, invoiceMeta?.invoiceNumber);
     link.click();
   };
 
@@ -705,6 +707,8 @@ export default function Home() {
       throw new Error("Invalid invoice number response.");
     }
 
+    setInvoiceMeta({ invoiceNumber: invoiceNo, invoiceDate: dateText });
+
     const lineItems = videoLinks
       .slice(0, cooperationCount)
       .map((url, idx) => ({
@@ -713,115 +717,25 @@ export default function Home() {
         amount: Number(formatUsd(videoAmounts[idx] || "0")),
       }))
       .filter((item) => item.url.length > 0 && item.amount > 0);
-    const primaryAmount = lineItems[0]?.amount ?? 0;
-    const extraItems = lineItems.slice(1);
-    const noteAmount = extraItems.reduce((sum, item) => sum + item.amount, 0);
-    const totalAmount = primaryAmount + noteAmount;
 
-    const platformCountMap = lineItems.reduce<Record<string, number>>((acc, item) => {
-      acc[item.platform] = (acc[item.platform] || 0) + 1;
-      return acc;
-    }, {});
-    const detailLines = Object.entries(platformCountMap)
-      .map(([platform, count]) => `${count === 1 ? "One" : String(count)} ${platform} Video${count > 1 ? "s" : ""}`)
-      .slice(0, 4);
-
-    const paymentBankLines = isUnitedStatesBankCountry
-      ? [
-          `Bank: ${formData.bankName || "-"}`,
-          `Routing Number: ${formData.routingNumber || "-"}`,
-          `Account Number: ${formData.accountNumber || "-"}`,
-        ]
-      : [
-          `Bank: ${formData.bankName || "-"}`,
-          `SWIFT / BIC: ${formData.swiftCode || "-"}`,
-          `Account Number / IBAN: ${formData.accountNumber || "-"}`,
-        ];
-    const paymentAddressLines = [
-      formData.addressLine1 || "-",
-      formData.addressLine2 || "",
-      `${formData.city || "-"}, ${formData.state || "-"} ${formData.postalCode || "-"}`,
-      formData.legalCountry || "-",
-    ].filter((line) => line.trim().length > 0);
-
-    const templateBytes = await fetch("/invoice-editable-template.pdf").then((res) => res.arrayBuffer());
-    const pdfDoc = await PDFDocument.load(templateBytes);
-    const form = pdfDoc.getForm();
-    const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
-
-    const setText = (fieldName: string, value: string, fontSize = 10) => {
-      try {
-        const field = form.getTextField(fieldName);
-        field.setText(value);
-        field.setFontSize(fontSize);
-      } catch {
-        // Ignore missing fields in template.
-      }
-    };
-
-    setText("date", dateText, 10);
-    setText("invoice number", invoiceNo, 10);
-    setText("creator name", formData.fullName || "-", 10);
-    setText("creator email address", formData.creatorEmail || "-", 10);
-    setText("payment information", "", 10);
-    setText("first", detailLines[0] || "", 10);
-    setText("second", detailLines[1] || "", 10);
-    setText("Third", detailLines[2] || "", 10);
-    setText("forth", detailLines[3] || "", 10);
-    setText("video amount", primaryAmount > 0 ? primaryAmount.toFixed(2) : "", 10);
-    setText("note amount", noteAmount > 0 ? noteAmount.toFixed(2) : "", 10);
-    setText("total amount", totalAmount > 0 ? totalAmount.toFixed(2) : "0.00", 10);
-    setText("note", "", 10);
-
-    try {
-      const paymentField = form.getTextField("payment information");
-      const fieldWithWidgets = paymentField as unknown as {
-        acroField: {
-          getWidgets: () => Array<{
-            getRectangle: () => { x: number; y: number; width: number; height: number };
-          }>;
-        };
-      };
-      const widgets = fieldWithWidgets.acroField.getWidgets();
-      if (widgets && widgets.length >= 2) {
-        const page = pdfDoc.getPages()[0];
-        const [rectA, rectB] = widgets.map((widget) => widget.getRectangle());
-        const addressRect = rectA.y > rectB.y ? rectA : rectB;
-        const paymentRect = rectA.y > rectB.y ? rectB : rectA;
-
-        const drawLines = (lines: string[], rect: { x: number; y: number; width: number; height: number }) => {
-          const fontSize = 10;
-          const lineHeight = 11;
-          lines.forEach((line, idx) => {
-            const y = rect.y + rect.height - fontSize - idx * lineHeight;
-            if (y >= rect.y) {
-              page.drawText(line, {
-                x: rect.x,
-                y,
-                size: fontSize,
-                font,
-              });
-            }
-          });
-        };
-
-        drawLines(paymentAddressLines, addressRect);
-        drawLines(paymentBankLines, paymentRect);
-      }
-    } catch {
-      // Fall back to field values only if widget positions cannot be read.
-    }
-
-    form.updateFieldAppearances(font);
-    form.flatten();
-
-    const bytes = await pdfDoc.save();
-    const byteArray = bytes as Uint8Array;
-    const arrayBuffer = byteArray.buffer.slice(
-      byteArray.byteOffset,
-      byteArray.byteOffset + byteArray.byteLength,
-    ) as ArrayBuffer;
-    const blob = new Blob([arrayBuffer], { type: "application/pdf" });
+    const blob = await createInvoicePdfBlob({
+      invoiceNumber: invoiceNo,
+      invoiceDate: dateText,
+      fullName: formData.fullName,
+      creatorEmail: formData.creatorEmail,
+      bankName: formData.bankName,
+      bankCountry: formData.bankCountry,
+      routingNumber: formData.routingNumber,
+      swiftCode: formData.swiftCode,
+      accountNumber: formData.accountNumber,
+      legalCountry: formData.legalCountry,
+      addressLine1: formData.addressLine1,
+      addressLine2: formData.addressLine2,
+      city: formData.city,
+      state: formData.state,
+      postalCode: formData.postalCode,
+      videos: lineItems,
+    });
     return URL.createObjectURL(blob);
   };
 
@@ -852,6 +766,8 @@ export default function Home() {
         },
         body: JSON.stringify({
           ...formData,
+          invoiceNumber: invoiceMeta?.invoiceNumber,
+          invoiceDate: invoiceMeta?.invoiceDate,
           videoItems: videoLinks.slice(0, cooperationCount).map((url, idx) => ({
             url,
             platform: linkChecks[idx]?.platform || "Other",

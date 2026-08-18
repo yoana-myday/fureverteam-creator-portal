@@ -478,6 +478,16 @@ button:disabled {
   background: var(--brand-hover);
 }
 
+.danger-btn {
+  background: #fff;
+  border-color: #d85a6d;
+  color: #b52e45;
+}
+
+.danger-btn:hover {
+  background: #fff0f2;
+}
+
 .preview-box ul {
   list-style: none;
   display: flex;
@@ -611,6 +621,20 @@ button:disabled {
   padding: 12px;
   background: #fff9fc;
   margin-bottom: 10px;
+}
+
+.submission-card-declined {
+  background: #fff6f7;
+  border-color: #efc8ce;
+}
+
+.admin-invoice-preview {
+  scroll-margin-top: 18px;
+  box-shadow: 0 12px 30px rgba(35, 49, 87, 0.1);
+}
+
+.admin-invoice-preview .pdf-preview-frame {
+  margin-top: 10px;
 }
 
 .submission-top {
