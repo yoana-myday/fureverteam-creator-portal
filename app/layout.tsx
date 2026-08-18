@@ -1,5 +1,5 @@
 import type { Metadata } from "next";
-import { Geist, Geist_Mono } from "next/font/google";
+import { Fredoka, Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -12,9 +12,19 @@ const geistMono = Geist_Mono({
   subsets: ["latin"],
 });
 
+const fredoka = Fredoka({
+  variable: "--font-fredoka",
+  subsets: ["latin"],
+});
+
 export const metadata: Metadata = {
   title: "FureverTeam Creator Portal",
   description: "Creator invoice submission and PDF generation portal",
+  icons: {
+    icon: "/fureverteam-logo-transparent.png",
+    shortcut: "/fureverteam-logo-transparent.png",
+    apple: "/fureverteam-logo-transparent.png",
+  },
 };
 
 export default function RootLayout({
@@ -23,7 +33,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className={`${geistSans.variable} ${geistMono.variable}`}>
+    <html lang="en" className={`${geistSans.variable} ${geistMono.variable} ${fredoka.variable}`}>
       <body>{children}</body>
     </html>
   );

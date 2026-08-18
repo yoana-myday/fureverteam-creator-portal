@@ -1,139 +1,623 @@
 "use client";
 
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useState } from "react";
 import Image from "next/image";
-import jsPDF from "jspdf";
+import Link from "next/link";
+import { PDFDocument, StandardFonts } from "pdf-lib";
 
-type FormStep = "country" | "details" | "preview";
-type CountryCode = "US" | "UK" | "CN" | "OTHER";
+type FormStep = "country" | "links" | "details" | "preview";
 
 type InvoiceFormData = {
-  country: CountryCode | "";
+  country: string;
   fullName: string;
   creatorEmail: string;
-  billingAddress: string;
-  invoiceNumber: string;
-  invoiceDate: string;
-  dueDate: string;
-  serviceDescription: string;
-  currency: string;
-  amount: string;
-  payoutMethod: string;
-  payoutAccount: string;
-  taxNumber: string;
   companyName: string;
+  recipientType: "PERSON" | "BUSINESS" | "";
+  bankName: string;
+  bankCountry: string;
+  routingNumber: string;
+  swiftCode: string;
+  accountNumber: string;
+  legalCountry: string;
+  addressLine1: string;
+  addressLine2: string;
+  city: string;
+  state: string;
+  postalCode: string;
 };
 
-const countryOptions: Array<{ value: CountryCode; label: string }> = [
-  { value: "US", label: "United States" },
-  { value: "UK", label: "United Kingdom" },
-  { value: "CN", label: "China" },
-  { value: "OTHER", label: "Other" },
+type LinkCheckStatus = "idle" | "checking" | "valid" | "invalid" | "unavailable";
+
+type LinkCheckItem = {
+  status: LinkCheckStatus;
+  platform: string;
+};
+
+const t0Countries = [
+  "United States",
+  "United Kingdom",
+  "Canada",
+  "Australia",
+  "Germany",
+  "France",
+  "Japan",
+  "South Korea",
+  "Singapore",
+  "United Arab Emirates",
 ];
 
-const taxLabelMap: Record<CountryCode, string> = {
-  US: "Tax ID / EIN",
-  UK: "UTR / VAT Number",
-  CN: "Taxpayer Identification Number",
-  OTHER: "Tax Number",
-};
+const allCountries = [
+  "Afghanistan",
+  "Albania",
+  "Algeria",
+  "Andorra",
+  "Angola",
+  "Antigua and Barbuda",
+  "Argentina",
+  "Armenia",
+  "Australia",
+  "Austria",
+  "Azerbaijan",
+  "Bahamas",
+  "Bahrain",
+  "Bangladesh",
+  "Barbados",
+  "Belarus",
+  "Belgium",
+  "Belize",
+  "Benin",
+  "Bhutan",
+  "Bolivia",
+  "Bosnia and Herzegovina",
+  "Botswana",
+  "Brazil",
+  "Brunei",
+  "Bulgaria",
+  "Burkina Faso",
+  "Burundi",
+  "Cambodia",
+  "Cameroon",
+  "Canada",
+  "Cape Verde",
+  "Central African Republic",
+  "Chad",
+  "Chile",
+  "China (Mainland)",
+  "Hong Kong SAR, China",
+  "Macao SAR, China",
+  "Colombia",
+  "Comoros",
+  "Congo",
+  "Costa Rica",
+  "Cote d'Ivoire",
+  "Croatia",
+  "Cuba",
+  "Cyprus",
+  "Czech Republic",
+  "Democratic Republic of the Congo",
+  "Denmark",
+  "Djibouti",
+  "Dominica",
+  "Dominican Republic",
+  "Ecuador",
+  "Egypt",
+  "El Salvador",
+  "Equatorial Guinea",
+  "Eritrea",
+  "Estonia",
+  "Eswatini",
+  "Ethiopia",
+  "Fiji",
+  "Finland",
+  "France",
+  "Gabon",
+  "Gambia",
+  "Georgia",
+  "Germany",
+  "Ghana",
+  "Greece",
+  "Grenada",
+  "Guatemala",
+  "Guinea",
+  "Guinea-Bissau",
+  "Guyana",
+  "Haiti",
+  "Honduras",
+  "Hungary",
+  "Iceland",
+  "India",
+  "Indonesia",
+  "Iran",
+  "Iraq",
+  "Ireland",
+  "Israel",
+  "Italy",
+  "Jamaica",
+  "Japan",
+  "Jordan",
+  "Kazakhstan",
+  "Kenya",
+  "Kiribati",
+  "Kuwait",
+  "Kyrgyzstan",
+  "Laos",
+  "Latvia",
+  "Lebanon",
+  "Lesotho",
+  "Liberia",
+  "Libya",
+  "Liechtenstein",
+  "Lithuania",
+  "Luxembourg",
+  "Madagascar",
+  "Malawi",
+  "Malaysia",
+  "Maldives",
+  "Mali",
+  "Malta",
+  "Marshall Islands",
+  "Mauritania",
+  "Mauritius",
+  "Mexico",
+  "Micronesia",
+  "Moldova",
+  "Monaco",
+  "Mongolia",
+  "Montenegro",
+  "Morocco",
+  "Mozambique",
+  "Myanmar",
+  "Namibia",
+  "Nauru",
+  "Nepal",
+  "Netherlands",
+  "New Zealand",
+  "Nicaragua",
+  "Niger",
+  "Nigeria",
+  "North Korea",
+  "North Macedonia",
+  "Norway",
+  "Oman",
+  "Pakistan",
+  "Palau",
+  "Panama",
+  "Papua New Guinea",
+  "Paraguay",
+  "Peru",
+  "Philippines",
+  "Poland",
+  "Portugal",
+  "Qatar",
+  "Romania",
+  "Russia",
+  "Rwanda",
+  "Saint Kitts and Nevis",
+  "Saint Lucia",
+  "Saint Vincent and the Grenadines",
+  "Samoa",
+  "San Marino",
+  "Sao Tome and Principe",
+  "Saudi Arabia",
+  "Senegal",
+  "Serbia",
+  "Seychelles",
+  "Sierra Leone",
+  "Singapore",
+  "Slovakia",
+  "Slovenia",
+  "Solomon Islands",
+  "Somalia",
+  "South Africa",
+  "South Korea",
+  "South Sudan",
+  "Spain",
+  "Sri Lanka",
+  "Sudan",
+  "Suriname",
+  "Sweden",
+  "Switzerland",
+  "Syria",
+  "Taiwan, China",
+  "Tajikistan",
+  "Tanzania",
+  "Thailand",
+  "Timor-Leste",
+  "Togo",
+  "Tonga",
+  "Trinidad and Tobago",
+  "Tunisia",
+  "Turkey",
+  "Turkmenistan",
+  "Tuvalu",
+  "Uganda",
+  "Ukraine",
+  "United Arab Emirates",
+  "United Kingdom",
+  "United States",
+  "Uruguay",
+  "Uzbekistan",
+  "Vanuatu",
+  "Vatican City",
+  "Venezuela",
+  "Vietnam",
+  "Yemen",
+  "Zambia",
+  "Zimbabwe",
+];
 
-const currencyMap: Record<CountryCode, string> = {
-  US: "USD",
-  UK: "GBP",
-  CN: "CNY",
-  OTHER: "USD",
-};
+const orderedCountryOptions = [
+  ...t0Countries,
+  ...allCountries
+    .filter((country) => !t0Countries.includes(country))
+    .sort((a, b) => a.localeCompare(b)),
+];
 
-const todayISO = new Date().toISOString().slice(0, 10);
+const countryLookup = new Map(
+  orderedCountryOptions.map((country) => [country.toLowerCase(), country]),
+);
+
+function normalizeCountryInput(rawValue: string): string {
+  const value = rawValue.trim();
+  if (!value) {
+    return "";
+  }
+
+  const exactMatch = countryLookup.get(value.toLowerCase());
+  if (exactMatch) {
+    return exactMatch;
+  }
+
+  const startsWithMatch = orderedCountryOptions.find((country) =>
+    country.toLowerCase().startsWith(value.toLowerCase()),
+  );
+  if (startsWithMatch) {
+    return startsWithMatch;
+  }
+
+  const includesMatch = orderedCountryOptions.find((country) =>
+    country.toLowerCase().includes(value.toLowerCase()),
+  );
+  return includesMatch ?? "";
+}
+
+const linkPlatforms = [
+  "YouTube",
+  "TikTok",
+  "Instagram",
+  "X",
+  "Facebook",
+  "Vimeo",
+  "Twitch",
+  "Other",
+];
+
+const usStateOptions = [
+  { code: "AL", name: "Alabama" },
+  { code: "AK", name: "Alaska" },
+  { code: "AZ", name: "Arizona" },
+  { code: "AR", name: "Arkansas" },
+  { code: "CA", name: "California" },
+  { code: "CO", name: "Colorado" },
+  { code: "CT", name: "Connecticut" },
+  { code: "DE", name: "Delaware" },
+  { code: "FL", name: "Florida" },
+  { code: "GA", name: "Georgia" },
+  { code: "HI", name: "Hawaii" },
+  { code: "ID", name: "Idaho" },
+  { code: "IL", name: "Illinois" },
+  { code: "IN", name: "Indiana" },
+  { code: "IA", name: "Iowa" },
+  { code: "KS", name: "Kansas" },
+  { code: "KY", name: "Kentucky" },
+  { code: "LA", name: "Louisiana" },
+  { code: "ME", name: "Maine" },
+  { code: "MD", name: "Maryland" },
+  { code: "MA", name: "Massachusetts" },
+  { code: "MI", name: "Michigan" },
+  { code: "MN", name: "Minnesota" },
+  { code: "MS", name: "Mississippi" },
+  { code: "MO", name: "Missouri" },
+  { code: "MT", name: "Montana" },
+  { code: "NE", name: "Nebraska" },
+  { code: "NV", name: "Nevada" },
+  { code: "NH", name: "New Hampshire" },
+  { code: "NJ", name: "New Jersey" },
+  { code: "NM", name: "New Mexico" },
+  { code: "NY", name: "New York" },
+  { code: "NC", name: "North Carolina" },
+  { code: "ND", name: "North Dakota" },
+  { code: "OH", name: "Ohio" },
+  { code: "OK", name: "Oklahoma" },
+  { code: "OR", name: "Oregon" },
+  { code: "PA", name: "Pennsylvania" },
+  { code: "RI", name: "Rhode Island" },
+  { code: "SC", name: "South Carolina" },
+  { code: "SD", name: "South Dakota" },
+  { code: "TN", name: "Tennessee" },
+  { code: "TX", name: "Texas" },
+  { code: "UT", name: "Utah" },
+  { code: "VT", name: "Vermont" },
+  { code: "VA", name: "Virginia" },
+  { code: "WA", name: "Washington" },
+  { code: "WV", name: "West Virginia" },
+  { code: "WI", name: "Wisconsin" },
+  { code: "WY", name: "Wyoming" },
+] as const;
 
 const initialFormData: InvoiceFormData = {
   country: "",
   fullName: "",
   creatorEmail: "",
-  billingAddress: "",
-  invoiceNumber: "",
-  invoiceDate: todayISO,
-  dueDate: "",
-  serviceDescription: "",
-  currency: "USD",
-  amount: "",
-  payoutMethod: "",
-  payoutAccount: "",
-  taxNumber: "",
   companyName: "",
+  recipientType: "",
+  bankName: "",
+  bankCountry: "United States",
+  routingNumber: "",
+  swiftCode: "",
+  accountNumber: "",
+  legalCountry: "United States",
+  addressLine1: "",
+  addressLine2: "",
+  city: "",
+  state: "",
+  postalCode: "",
 };
 
 function labelForKey(key: keyof InvoiceFormData): string {
   const map: Partial<Record<keyof InvoiceFormData, string>> = {
     fullName: "Full Name",
     creatorEmail: "Email",
-    billingAddress: "Billing Address",
-    invoiceNumber: "Invoice Number",
-    invoiceDate: "Invoice Date",
-    dueDate: "Due Date",
-    serviceDescription: "Service Description",
-    currency: "Currency",
-    amount: "Amount",
-    payoutMethod: "Payout Method",
-    payoutAccount: "Payout Account",
-    taxNumber: "Tax Number",
     companyName: "Company / Studio Name",
+    recipientType: "Recipient Type",
+    bankName: "Bank",
+    bankCountry: "Bank Country / Territory",
+    routingNumber: "Routing Number",
+    swiftCode: "SWIFT / BIC",
+    accountNumber: "Account Number",
+    legalCountry: "Country / Territory",
+    addressLine1: "Address Line 1",
+    city: "City",
+    state: "State",
+    postalCode: "Postal / ZIP Code",
   };
 
   return map[key] ?? key;
 }
 
 export default function Home() {
+  const [entryMode, setEntryMode] = useState<"select" | "creator">("select");
   const [step, setStep] = useState<FormStep>("country");
   const [formData, setFormData] = useState<InvoiceFormData>(initialFormData);
   const [error, setError] = useState<string>("");
   const [notice, setNotice] = useState<string>("");
-  const [isGenerating, setIsGenerating] = useState<boolean>(false);
+  const [isSubmittingInvoice, setIsSubmittingInvoice] = useState<boolean>(false);
+  const [isPreparingPreviewPdf, setIsPreparingPreviewPdf] = useState<boolean>(false);
+  const [previewPdfUrl, setPreviewPdfUrl] = useState<string>("");
+  const [countryQuery, setCountryQuery] = useState<string>("");
+  const [bankCountryQuery, setBankCountryQuery] = useState<string>("United States");
+  const [legalCountryQuery, setLegalCountryQuery] = useState<string>("United States");
+  const [cooperationCount, setCooperationCount] = useState<number>(1);
+  const [videoLinks, setVideoLinks] = useState<string[]>([""]);
+  const [videoAmounts, setVideoAmounts] = useState<string[]>([""]);
+  const [linkChecks, setLinkChecks] = useState<LinkCheckItem[]>([{ status: "idle", platform: "" }]);
 
-  const requiredFields: Array<keyof InvoiceFormData> = useMemo(
-    () => [
-      "fullName",
-      "creatorEmail",
-      "billingAddress",
-      "invoiceNumber",
-      "invoiceDate",
-      "serviceDescription",
-      "currency",
-      "amount",
-      "payoutMethod",
-      "payoutAccount",
-    ],
-    [],
-  );
-
-  const taxLabel = formData.country ? taxLabelMap[formData.country] : "Tax Number";
+  const isUnitedStatesBankCountry = formData.bankCountry === "United States";
+  const isUnitedStatesAddressCountry = formData.legalCountry === "United States";
 
   const updateField = (key: keyof InvoiceFormData, value: string) => {
     setFormData((previous) => ({ ...previous, [key]: value }));
   };
 
-  const pickCountry = (country: CountryCode) => {
-    setFormData((previous) => ({
-      ...previous,
-      country,
-      currency: currencyMap[country],
-      taxNumber: "",
-    }));
-    setError("");
+  const commitCountryField = (field: "country" | "bankCountry" | "legalCountry", inputValue: string) => {
+    const normalized = normalizeCountryInput(inputValue);
+    updateField(field, normalized);
+
+    if (field === "country") {
+      setCountryQuery(normalized || inputValue);
+    } else if (field === "bankCountry") {
+      setBankCountryQuery(normalized || inputValue);
+    } else {
+      setLegalCountryQuery(normalized || inputValue);
+    }
+
+    return normalized;
   };
 
   const continueToDetails = () => {
-    if (!formData.country) {
+    const normalizedCountry = commitCountryField("country", countryQuery);
+    if (!normalizedCountry) {
       setError("Please select your country first.");
       return;
     }
 
+    if (
+      !formData.legalCountry ||
+      (formData.legalCountry === "United States" && legalCountryQuery === "United States")
+    ) {
+      updateField("legalCountry", normalizedCountry);
+      setLegalCountryQuery(normalizedCountry);
+    }
+    if (
+      !formData.bankCountry ||
+      (formData.bankCountry === "United States" && bankCountryQuery === "United States")
+    ) {
+      updateField("bankCountry", normalizedCountry);
+      setBankCountryQuery(normalizedCountry);
+    }
+
+    setError("");
+    setStep("links");
+  };
+
+  const updateCooperationCount = (count: number) => {
+    const safeCount = Math.min(10, Math.max(1, count));
+    setCooperationCount(safeCount);
+    setVideoLinks((previous) => {
+      const next = [...previous];
+      while (next.length < safeCount) {
+        next.push("");
+      }
+      return next.slice(0, safeCount);
+    });
+    setVideoAmounts((previous) => {
+      const next = [...previous];
+      while (next.length < safeCount) {
+        next.push("");
+      }
+      return next.slice(0, safeCount);
+    });
+    setLinkChecks((previous) => {
+      const next = [...previous];
+      while (next.length < safeCount) {
+        next.push({ status: "idle", platform: "" });
+      }
+      return next.slice(0, safeCount);
+    });
+  };
+
+  const updateLinkAt = (index: number, value: string) => {
+    setVideoLinks((previous) => previous.map((item, idx) => (idx === index ? value : item)));
+    setLinkChecks((previous) =>
+      previous.map((item, idx) =>
+        idx === index
+          ? {
+              status: "idle",
+              platform: "",
+            }
+          : item,
+      ),
+    );
+  };
+
+  const updateVideoAmountAt = (index: number, value: string) => {
+    setVideoAmounts((previous) => previous.map((item, idx) => (idx === index ? value : item)));
+  };
+
+  const verifySingleLink = useCallback(async (index: number) => {
+    const url = videoLinks[index]?.trim();
+    if (!url) {
+      setLinkChecks((previous) =>
+        previous.map((item, idx) =>
+          idx === index ? { ...item, status: "invalid", platform: "" } : item,
+        ),
+      );
+      return false;
+    }
+
+    setLinkChecks((previous) =>
+      previous.map((item, idx) =>
+        idx === index ? { ...item, status: "checking", platform: item.platform } : item,
+      ),
+    );
+
+    try {
+      const response = await fetch("/api/verify-link", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ url }),
+      });
+      const result = (await response.json()) as {
+        ok?: boolean;
+        status?: LinkCheckStatus;
+        platform?: string;
+      };
+
+      const isValid = Boolean(response.ok && result.ok);
+      const status: LinkCheckStatus = isValid
+        ? "valid"
+        : result.status === "unavailable"
+          ? "unavailable"
+          : "invalid";
+      setLinkChecks((previous) =>
+        previous.map((item, idx) =>
+          idx === index
+            ? {
+                status,
+                platform: result.platform ?? "",
+              }
+            : item,
+        ),
+      );
+
+      return isValid;
+    } catch {
+      setLinkChecks((previous) =>
+        previous.map((item, idx) =>
+          idx === index ? { ...item, status: "unavailable", platform: "" } : item,
+        ),
+      );
+      return false;
+    }
+  }, [videoLinks]);
+
+  useEffect(() => {
+    const hasAnyInput = videoLinks.slice(0, cooperationCount).some((link) => link.trim().length > 0);
+    if (!hasAnyInput) {
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      videoLinks.slice(0, cooperationCount).forEach((link, idx) => {
+        if (link.trim()) {
+          void verifySingleLink(idx);
+        }
+      });
+    }, 700);
+
+    return () => {
+      clearTimeout(timer);
+    };
+  }, [videoLinks, cooperationCount, verifySingleLink]);
+
+  const continueToInvoiceDetails = () => {
+    if (!canSubmitLinks) {
+      setError("Please wait until all links are verified.");
+      return;
+    }
     setError("");
     setStep("details");
   };
 
+  const visibleLinks = videoLinks.slice(0, cooperationCount);
+  const visibleAmounts = videoAmounts.slice(0, cooperationCount);
+  const visibleChecks = linkChecks.slice(0, cooperationCount);
+  const allLinksFilled = visibleLinks.every((link) => link.trim().length > 0);
+  const allAmountsValid = visibleAmounts.every((amount) => Number(amount) > 0);
+  const anyLinkChecking = visibleChecks.some((item) => item?.status === "checking");
+  const allLinksVerified =
+    visibleChecks.length === cooperationCount &&
+    visibleChecks.every((item) => item?.status === "valid");
+  const canSubmitLinks =
+    allLinksFilled &&
+    allAmountsValid &&
+    allLinksVerified &&
+    !anyLinkChecking;
+
   const validateBeforePreview = () => {
+    const requiredFields: Array<keyof InvoiceFormData> = [
+      "fullName",
+      "creatorEmail",
+      "recipientType",
+      "bankName",
+      "bankCountry",
+      "accountNumber",
+      "legalCountry",
+      "addressLine1",
+      "city",
+      "postalCode",
+    ];
+    if (isUnitedStatesBankCountry) {
+      requiredFields.push("routingNumber");
+    } else {
+      requiredFields.push("swiftCode");
+    }
+    if (isUnitedStatesAddressCountry) {
+      requiredFields.push("state");
+    }
+
     const missing = requiredFields.filter((field) => !formData[field]?.trim());
     if (missing.length > 0) {
       const labels = missing.map(labelForKey).join(", ");
@@ -145,313 +629,733 @@ export default function Home() {
     return true;
   };
 
-  const submitForPreview = (event: FormEvent) => {
+  const submitForPreview = async (event: FormEvent) => {
     event.preventDefault();
     if (!validateBeforePreview()) {
       return;
     }
 
-    setStep("preview");
+    setIsPreparingPreviewPdf(true);
+    setError("");
+
+    try {
+      const nextPdfUrl = await buildPdf();
+      setPreviewPdfUrl((previousUrl) => {
+        if (previousUrl) {
+          URL.revokeObjectURL(previousUrl);
+        }
+        return nextPdfUrl;
+      });
+      setStep("preview");
+    } catch {
+      setError("Failed to generate preview PDF. Please check the form and try again.");
+    } finally {
+      setIsPreparingPreviewPdf(false);
+    }
   };
 
-  const buildPdf = () => {
-    const doc = new jsPDF();
-    doc.setFontSize(20);
-    doc.text("FureverTeam Creator Invoice", 20, 20);
+  const goToPreviousStep = () => {
+    if (step === "links") {
+      setStep("country");
+      return;
+    }
+    if (step === "details") {
+      setStep("links");
+      return;
+    }
+    if (step === "preview") {
+      setPreviewPdfUrl((previousUrl) => {
+        if (previousUrl) {
+          URL.revokeObjectURL(previousUrl);
+        }
+        return "";
+      });
+      setStep("details");
+    }
+  };
 
-    doc.setFontSize(11);
-    const lines = [
-      `Creator: ${formData.fullName}`,
-      `Company/Studio: ${formData.companyName || "-"}`,
-      `Country: ${
-        countryOptions.find((item) => item.value === formData.country)?.label ?? "-"
-      }`,
-      `${taxLabel}: ${formData.taxNumber || "-"}`,
-      `Email: ${formData.creatorEmail}`,
-      `Billing Address: ${formData.billingAddress}`,
-      `Invoice Number: ${formData.invoiceNumber}`,
-      `Invoice Date: ${formData.invoiceDate}`,
-      `Due Date: ${formData.dueDate || "-"}`,
-      `Service Description: ${formData.serviceDescription}`,
-      `Amount: ${formData.currency} ${formData.amount}`,
-      `Payout Method: ${formData.payoutMethod}`,
-      `Payout Account: ${formData.payoutAccount}`,
-    ];
+  const formatUsd = (rawValue: string): string => {
+    const amount = Number(rawValue || 0);
+    return Number.isFinite(amount) ? amount.toFixed(2) : "0.00";
+  };
 
-    let y = 34;
-    lines.forEach((line) => {
-      const split = doc.splitTextToSize(line, 170);
-      doc.text(split, 20, y);
-      y += split.length * 7;
+  const downloadPdfFromUrl = (blobUrl: string) => {
+    const safeName = (formData.fullName || "creator").replace(/\s+/g, "-").toLowerCase();
+    const link = document.createElement("a");
+    link.href = blobUrl;
+    link.download = `invoice-${safeName}.pdf`;
+    link.click();
+  };
+
+  const buildPdf = async () => {
+    const invoiceMetaResponse = await fetch("/api/invoice-number", {
+      method: "GET",
+      cache: "no-store",
     });
+    if (!invoiceMetaResponse.ok) {
+      throw new Error("Failed to generate invoice number.");
+    }
+    const invoiceMeta = (await invoiceMetaResponse.json()) as {
+      invoiceNumber?: string;
+      dateText?: string;
+    };
+    const invoiceNo = invoiceMeta.invoiceNumber;
+    const dateText = invoiceMeta.dateText;
+    if (!invoiceNo || !dateText) {
+      throw new Error("Invalid invoice number response.");
+    }
 
-    doc.save(`invoice-${formData.invoiceNumber || "draft"}.pdf`);
+    const lineItems = videoLinks
+      .slice(0, cooperationCount)
+      .map((url, idx) => ({
+        url: url.trim(),
+        platform: linkChecks[idx]?.platform || "Other",
+        amount: Number(formatUsd(videoAmounts[idx] || "0")),
+      }))
+      .filter((item) => item.url.length > 0 && item.amount > 0);
+    const primaryAmount = lineItems[0]?.amount ?? 0;
+    const extraItems = lineItems.slice(1);
+    const noteAmount = extraItems.reduce((sum, item) => sum + item.amount, 0);
+    const totalAmount = primaryAmount + noteAmount;
+
+    const platformCountMap = lineItems.reduce<Record<string, number>>((acc, item) => {
+      acc[item.platform] = (acc[item.platform] || 0) + 1;
+      return acc;
+    }, {});
+    const detailLines = Object.entries(platformCountMap)
+      .map(([platform, count]) => `${count === 1 ? "One" : String(count)} ${platform} Video${count > 1 ? "s" : ""}`)
+      .slice(0, 4);
+
+    const paymentBankLines = isUnitedStatesBankCountry
+      ? [
+          `Bank: ${formData.bankName || "-"}`,
+          `Routing Number: ${formData.routingNumber || "-"}`,
+          `Account Number: ${formData.accountNumber || "-"}`,
+        ]
+      : [
+          `Bank: ${formData.bankName || "-"}`,
+          `SWIFT / BIC: ${formData.swiftCode || "-"}`,
+          `Account Number / IBAN: ${formData.accountNumber || "-"}`,
+        ];
+    const paymentAddressLines = [
+      formData.addressLine1 || "-",
+      formData.addressLine2 || "",
+      `${formData.city || "-"}, ${formData.state || "-"} ${formData.postalCode || "-"}`,
+      formData.legalCountry || "-",
+    ].filter((line) => line.trim().length > 0);
+
+    const templateBytes = await fetch("/invoice-editable-template.pdf").then((res) => res.arrayBuffer());
+    const pdfDoc = await PDFDocument.load(templateBytes);
+    const form = pdfDoc.getForm();
+    const font = await pdfDoc.embedFont(StandardFonts.Helvetica);
+
+    const setText = (fieldName: string, value: string, fontSize = 10) => {
+      try {
+        const field = form.getTextField(fieldName);
+        field.setText(value);
+        field.setFontSize(fontSize);
+      } catch {
+        // Ignore missing fields in template.
+      }
+    };
+
+    setText("date", dateText, 10);
+    setText("invoice number", invoiceNo, 10);
+    setText("creator name", formData.fullName || "-", 10);
+    setText("creator email address", formData.creatorEmail || "-", 10);
+    setText("payment information", "", 10);
+    setText("first", detailLines[0] || "", 10);
+    setText("second", detailLines[1] || "", 10);
+    setText("Third", detailLines[2] || "", 10);
+    setText("forth", detailLines[3] || "", 10);
+    setText("video amount", primaryAmount > 0 ? primaryAmount.toFixed(2) : "", 10);
+    setText("note amount", noteAmount > 0 ? noteAmount.toFixed(2) : "", 10);
+    setText("total amount", totalAmount > 0 ? totalAmount.toFixed(2) : "0.00", 10);
+    setText("note", "", 10);
+
+    try {
+      const paymentField = form.getTextField("payment information");
+      const fieldWithWidgets = paymentField as unknown as {
+        acroField: {
+          getWidgets: () => Array<{
+            getRectangle: () => { x: number; y: number; width: number; height: number };
+          }>;
+        };
+      };
+      const widgets = fieldWithWidgets.acroField.getWidgets();
+      if (widgets && widgets.length >= 2) {
+        const page = pdfDoc.getPages()[0];
+        const [rectA, rectB] = widgets.map((widget) => widget.getRectangle());
+        const addressRect = rectA.y > rectB.y ? rectA : rectB;
+        const paymentRect = rectA.y > rectB.y ? rectB : rectA;
+
+        const drawLines = (lines: string[], rect: { x: number; y: number; width: number; height: number }) => {
+          const fontSize = 10;
+          const lineHeight = 11;
+          lines.forEach((line, idx) => {
+            const y = rect.y + rect.height - fontSize - idx * lineHeight;
+            if (y >= rect.y) {
+              page.drawText(line, {
+                x: rect.x,
+                y,
+                size: fontSize,
+                font,
+              });
+            }
+          });
+        };
+
+        drawLines(paymentAddressLines, addressRect);
+        drawLines(paymentBankLines, paymentRect);
+      }
+    } catch {
+      // Fall back to field values only if widget positions cannot be read.
+    }
+
+    form.updateFieldAppearances(font);
+    form.flatten();
+
+    const bytes = await pdfDoc.save();
+    const byteArray = bytes as Uint8Array;
+    const arrayBuffer = byteArray.buffer.slice(
+      byteArray.byteOffset,
+      byteArray.byteOffset + byteArray.byteLength,
+    ) as ArrayBuffer;
+    const blob = new Blob([arrayBuffer], { type: "application/pdf" });
+    return URL.createObjectURL(blob);
   };
 
-  const generateInvoice = async () => {
-    setIsGenerating(true);
+  useEffect(() => {
+    return () => {
+      if (previewPdfUrl) {
+        URL.revokeObjectURL(previewPdfUrl);
+      }
+    };
+  }, [previewPdfUrl]);
+
+  const submitInvoice = async () => {
+    setIsSubmittingInvoice(true);
     setNotice("");
     setError("");
 
     try {
-      buildPdf();
+      let pdfUrl = previewPdfUrl;
+      if (!pdfUrl) {
+        pdfUrl = await buildPdf();
+      }
+      downloadPdfFromUrl(pdfUrl);
 
       const response = await fetch("/api/creator-submission", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify(formData),
+        body: JSON.stringify({
+          ...formData,
+          videoItems: videoLinks.slice(0, cooperationCount).map((url, idx) => ({
+            url,
+            platform: linkChecks[idx]?.platform || "Other",
+            campaignTag: "",
+            amount: Number(videoAmounts[idx] || 0),
+            verified: linkChecks[idx]?.status === "valid",
+          })),
+        }),
       });
 
       if (!response.ok) {
         throw new Error("Background sync failed.");
       }
 
-      setNotice("Invoice PDF generated successfully.");
+      setNotice("Invoice submitted successfully. PDF downloaded.");
     } catch {
-      setNotice("Invoice PDF generated successfully.");
+      setError("Invoice submission failed. PDF was downloaded. Please try submit again.");
     } finally {
-      setIsGenerating(false);
+      setIsSubmittingInvoice(false);
     }
   };
 
+  if (entryMode === "select") {
+    return (
+      <main className="landing-wrapper">
+        <section className="landing-card">
+          <Image
+            src="/fureverteam-logo-transparent.png"
+            alt="FureverTeam Logo"
+            width={420}
+            height={280}
+            className="landing-logo"
+            priority
+          />
+          <h1 className="portal-title">FureverTeam Creator Portal</h1>
+          <p className="landing-subtitle">Choose your entry point to continue.</p>
+          <div className="landing-actions">
+            <button type="button" className="landing-btn landing-btn-primary" onClick={() => setEntryMode("creator")}>
+              I am creator / agency
+            </button>
+            <Link href="/admin" className="landing-btn landing-btn-minor">
+              I am from fureverteam
+            </Link>
+          </div>
+        </section>
+      </main>
+    );
+  }
+
   return (
     <main className="portal-wrapper">
-      <section className="portal-card">
-        <Image
-          src="/fureverteam-logo.png"
-          alt="FureverTeam Creator Portal logo"
-          width={380}
-          height={260}
-          className="portal-logo"
-          priority
-        />
-
-        <h1>FureverTeam Creator Portal</h1>
-        <p className="portal-subtitle">
-          Fill in your invoice details, review, then generate your PDF.
-        </p>
-
-        <div className="step-indicator">
-          <span className={step === "country" ? "active-step" : ""}>1. Country</span>
-          <span className={step === "details" ? "active-step" : ""}>2. Details</span>
-          <span className={step === "preview" ? "active-step" : ""}>3. Preview</span>
+      <section className="portal-shell">
+        <div className="top-entry-row">
+          <Link href="/admin" className="landing-btn landing-btn-minor">
+            I am from fureverteam
+          </Link>
         </div>
-
-        {step === "country" && (
-          <div className="country-step">
-            <label htmlFor="country">Select your country</label>
-            <select
-              id="country"
-              value={formData.country}
-              onChange={(event) => pickCountry(event.target.value as CountryCode)}
-            >
-              <option value="">-- Please choose --</option>
-              {countryOptions.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-            <button type="button" onClick={continueToDetails}>
-              Continue
-            </button>
+        <header className="hero-card">
+          <div>
+            <h1 className="portal-title">FureverTeam Creator Portal</h1>
+            <p className="portal-subtitle">
+              Submit invoice details in minutes. Choose your country, fill your form, preview, and
+              generate your invoice PDF.
+            </p>
           </div>
-        )}
+        </header>
 
-        {step === "details" && (
-          <form className="invoice-form" onSubmit={submitForPreview}>
-            <label>
-              Full Name *
-              <input
-                value={formData.fullName}
-                onChange={(event) => updateField("fullName", event.target.value)}
-                required
-              />
-            </label>
-
-            <label>
-              Company / Studio Name
-              <input
-                value={formData.companyName}
-                onChange={(event) => updateField("companyName", event.target.value)}
-              />
-            </label>
-
-            <label>
-              Email *
-              <input
-                type="email"
-                value={formData.creatorEmail}
-                onChange={(event) => updateField("creatorEmail", event.target.value)}
-                required
-              />
-            </label>
-
-            <label>
-              Billing Address *
-              <textarea
-                value={formData.billingAddress}
-                onChange={(event) => updateField("billingAddress", event.target.value)}
-                rows={3}
-                required
-              />
-            </label>
-
-            <label>
-              {taxLabel}
-              <input
-                value={formData.taxNumber}
-                onChange={(event) => updateField("taxNumber", event.target.value)}
-              />
-            </label>
-
-            <label>
-              Invoice Number *
-              <input
-                value={formData.invoiceNumber}
-                onChange={(event) => updateField("invoiceNumber", event.target.value)}
-                required
-              />
-            </label>
-
-            <div className="row-2">
-              <label>
-                Invoice Date *
-                <input
-                  type="date"
-                  value={formData.invoiceDate}
-                  onChange={(event) => updateField("invoiceDate", event.target.value)}
-                  required
-                />
-              </label>
-
-              <label>
-                Due Date
-                <input
-                  type="date"
-                  value={formData.dueDate}
-                  onChange={(event) => updateField("dueDate", event.target.value)}
-                />
-              </label>
-            </div>
-
-            <label>
-              Service Description *
-              <textarea
-                value={formData.serviceDescription}
-                onChange={(event) => updateField("serviceDescription", event.target.value)}
-                rows={3}
-                required
-              />
-            </label>
-
-            <div className="row-2">
-              <label>
-                Currency *
-                <input
-                  value={formData.currency}
-                  onChange={(event) => updateField("currency", event.target.value)}
-                  required
-                />
-              </label>
-
-              <label>
-                Amount *
-                <input
-                  type="number"
-                  min="0"
-                  step="0.01"
-                  value={formData.amount}
-                  onChange={(event) => updateField("amount", event.target.value)}
-                  required
-                />
-              </label>
-            </div>
-
-            <label>
-              Payout Method *
-              <input
-                value={formData.payoutMethod}
-                onChange={(event) => updateField("payoutMethod", event.target.value)}
-                placeholder="Bank Transfer / PayPal / Wise"
-                required
-              />
-            </label>
-
-            <label>
-              Payout Account *
-              <input
-                value={formData.payoutAccount}
-                onChange={(event) => updateField("payoutAccount", event.target.value)}
-                placeholder="Bank account or payout email"
-                required
-              />
-            </label>
-
-            <div className="actions">
-              <button type="button" className="secondary-btn" onClick={() => setStep("country")}>
-                Back
-              </button>
-              <button type="submit">Preview Invoice</button>
-            </div>
-          </form>
-        )}
-
-        {step === "preview" && (
-          <div className="preview-box">
-            <h2>Invoice Preview</h2>
-            <ul>
-              <li>
-                <strong>Country:</strong>{" "}
-                {countryOptions.find((item) => item.value === formData.country)?.label}
-              </li>
-              <li>
-                <strong>Creator:</strong> {formData.fullName}
-              </li>
-              <li>
-                <strong>Company/Studio:</strong> {formData.companyName || "-"}
-              </li>
-              <li>
-                <strong>Email:</strong> {formData.creatorEmail}
-              </li>
-              <li>
-                <strong>Invoice Number:</strong> {formData.invoiceNumber}
-              </li>
-              <li>
-                <strong>Invoice Date:</strong> {formData.invoiceDate}
-              </li>
-              <li>
-                <strong>Due Date:</strong> {formData.dueDate || "-"}
-              </li>
-              <li>
-                <strong>Service:</strong> {formData.serviceDescription}
-              </li>
-              <li>
-                <strong>Amount:</strong> {formData.currency} {formData.amount}
-              </li>
-              <li>
-                <strong>Payout:</strong> {formData.payoutMethod} ({formData.payoutAccount})
-              </li>
-              <li>
-                <strong>{taxLabel}:</strong> {formData.taxNumber || "-"}
-              </li>
+        <section className="content-grid">
+          <aside className="info-panel">
+            <h2>Quick Guide</h2>
+            <ul className="guide-list">
+              <li>Select country first</li>
+              <li>Fill invoice details</li>
+              <li>Review every field</li>
+              <li>Generate and download PDF</li>
             </ul>
 
-            <div className="actions">
-              <button type="button" className="secondary-btn" onClick={() => setStep("details")}>
-                Edit Details
-              </button>
-              <button type="button" onClick={generateInvoice} disabled={isGenerating}>
-                {isGenerating ? "Generating..." : "Generate Invoice"}
-              </button>
+            <div className="status-card">
+              <h3>Current Step</h3>
+              <div className="step-indicator">
+                <span className={step === "country" ? "active-step" : ""}>1. Country</span>
+                <span className={step === "links" ? "active-step" : ""}>2. Links</span>
+                <span className={step === "details" ? "active-step" : ""}>3. Details</span>
+                <span className={step === "preview" ? "active-step" : ""}>4. Preview</span>
+              </div>
             </div>
-          </div>
-        )}
+          </aside>
 
-        {error && <p className="error-text">{error}</p>}
-        {notice && <p className="notice-text">{notice}</p>}
+          <section className="portal-card">
+            {step !== "country" && (
+              <div className="step-back-row">
+                <button type="button" className="secondary-btn" onClick={goToPreviousStep}>
+                  ← Back to previous step
+                </button>
+              </div>
+            )}
+
+            {step === "country" && (
+              <div className="country-step">
+                <label htmlFor="country">Select your country</label>
+                <input
+                  id="country"
+                  list="country-options"
+                  value={countryQuery}
+                  onChange={(event) => setCountryQuery(event.target.value)}
+                  onBlur={(event) => {
+                    commitCountryField("country", event.target.value);
+                  }}
+                  placeholder="Type country name..."
+                  autoComplete="off"
+                />
+                <datalist id="country-options">
+                  {orderedCountryOptions.map((countryName) => (
+                    <option key={countryName} value={countryName} />
+                  ))}
+                </datalist>
+                <button type="button" onClick={continueToDetails}>
+                  Continue
+                </button>
+              </div>
+            )}
+
+            {step === "links" && (
+              <div className="invoice-form">
+                <label>
+                  Collaboration quantity
+                  <select
+                    value={cooperationCount}
+                    onChange={(event) => updateCooperationCount(Number(event.target.value))}
+                  >
+                    {Array.from({ length: 10 }, (_, idx) => idx + 1).map((count) => (
+                      <option key={count} value={count}>
+                        {count}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                <div className="links-block">
+                  {videoLinks.slice(0, cooperationCount).map((link, index) => {
+                    const check = linkChecks[index] ?? { status: "idle", platform: "" };
+                    const statusText =
+                      check.status === "valid"
+                        ? "Verified"
+                        : check.status === "unavailable"
+                          ? "Verification unavailable"
+                          : check.status === "invalid"
+                            ? "Not verified"
+                            : check.status === "checking"
+                              ? "Checking..."
+                              : "Waiting";
+
+                    return (
+                      <div key={index} className="link-item">
+                        <label>
+                          Link {index + 1}
+                          <input
+                            value={link}
+                            onChange={(event) => updateLinkAt(index, event.target.value)}
+                            placeholder="Paste video link"
+                            autoComplete="off"
+                          />
+                        </label>
+                        <div className="amount-row">
+                          <label>
+                            Amount (USD)
+                            <input
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              value={videoAmounts[index] || ""}
+                              onChange={(event) => updateVideoAmountAt(index, event.target.value)}
+                              placeholder="0.00"
+                            />
+                          </label>
+                        </div>
+
+                        <div className="link-meta-row">
+                          <span className="platform-pill">
+                            {check.platform || linkPlatforms[linkPlatforms.length - 1]}
+                          </span>
+                          <span
+                            className={`link-status ${
+                              check.status === "valid"
+                                ? "status-valid"
+                                : check.status === "unavailable"
+                                  ? "status-unavailable"
+                                  : check.status === "invalid"
+                                    ? "status-invalid"
+                                    : check.status === "checking"
+                                      ? "status-checking"
+                                      : ""
+                            }`}
+                          >
+                            {check.status === "valid" ? "✓ " : ""}
+                            {statusText}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <div className="actions">
+                  <button type="button" className="secondary-btn" onClick={() => setStep("country")}>
+                    Back
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void continueToInvoiceDetails()}
+                    disabled={!canSubmitLinks}
+                  >
+                    Submit
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {step === "details" && (
+              <form className="invoice-form" onSubmit={submitForPreview}>
+                <label>
+                  Full Name *
+                  <input
+                    value={formData.fullName}
+                    onChange={(event) => updateField("fullName", event.target.value)}
+                    required
+                  />
+                </label>
+
+                <label>
+                  Company / Studio Name
+                  <input
+                    value={formData.companyName}
+                    onChange={(event) => updateField("companyName", event.target.value)}
+                  />
+                </label>
+
+                <label>
+                  Email *
+                  <input
+                    type="email"
+                    value={formData.creatorEmail}
+                    onChange={(event) => updateField("creatorEmail", event.target.value)}
+                    required
+                  />
+                </label>
+
+                <label>
+                  <span className="form-section-title">Select recipient type</span>
+                  <div className="choice-grid">
+                    <button
+                      type="button"
+                      className={`choice-card ${formData.recipientType === "PERSON" ? "choice-card-active" : ""}`}
+                      onClick={() => updateField("recipientType", "PERSON")}
+                    >
+                      Person
+                    </button>
+                    <button
+                      type="button"
+                      className={`choice-card ${formData.recipientType === "BUSINESS" ? "choice-card-active" : ""}`}
+                      onClick={() => updateField("recipientType", "BUSINESS")}
+                    >
+                      Business
+                    </button>
+                  </div>
+                </label>
+
+                <h3 className="form-section-title">Bank details</h3>
+
+                <label>
+                  Bank *
+                  <input
+                    value={formData.bankName}
+                    onChange={(event) => updateField("bankName", event.target.value)}
+                    placeholder="Bank Name"
+                    required
+                  />
+                </label>
+
+                <label>
+                  Bank Country or Territory *
+                  <input
+                    list="country-options"
+                    value={bankCountryQuery}
+                    onChange={(event) => {
+                      const value = event.target.value;
+                      setBankCountryQuery(value);
+                      updateField("bankCountry", normalizeCountryInput(value));
+                    }}
+                    onBlur={(event) => {
+                      commitCountryField("bankCountry", event.target.value);
+                    }}
+                    placeholder="Type country name..."
+                    autoComplete="off"
+                    required
+                  />
+                </label>
+
+                {isUnitedStatesBankCountry ? (
+                  <>
+                    <label>
+                      Routing number *
+                      <input
+                        value={formData.routingNumber}
+                        onChange={(event) => updateField("routingNumber", event.target.value)}
+                        placeholder="Routing Number"
+                        required
+                      />
+                    </label>
+                    <p className="helper-text">
+                      This information is required to send electronic payments in the U.S.
+                    </p>
+                  </>
+                ) : (
+                  <>
+                    <label>
+                      SWIFT / BIC *
+                      <input
+                        value={formData.swiftCode}
+                        onChange={(event) => updateField("swiftCode", event.target.value)}
+                        placeholder="SWIFT / BIC"
+                        required
+                      />
+                    </label>
+                    <p className="helper-text">
+                      Use the international transfer code for your local receiving bank.
+                    </p>
+                  </>
+                )}
+
+                <label>
+                  {isUnitedStatesBankCountry ? "Account number *" : "Account number / IBAN *"}
+                  <input
+                    value={formData.accountNumber}
+                    onChange={(event) => updateField("accountNumber", event.target.value)}
+                    placeholder={isUnitedStatesBankCountry ? "Account Number" : "Account Number / IBAN"}
+                    required
+                  />
+                </label>
+                <p className="helper-text">
+                  {isUnitedStatesBankCountry
+                    ? "This information is required to send domestic ACH payments."
+                    : "Use your local account identifier for international receiving transfers."}
+                </p>
+
+                <h3 className="form-section-title">Legal address</h3>
+
+                <label>
+                  Country or Territory *
+                  <input
+                    list="country-options"
+                    value={legalCountryQuery}
+                    onChange={(event) => {
+                      const value = event.target.value;
+                      setLegalCountryQuery(value);
+                      updateField("legalCountry", normalizeCountryInput(value));
+                    }}
+                    onBlur={(event) => {
+                      commitCountryField("legalCountry", event.target.value);
+                    }}
+                    placeholder="Type country name..."
+                    autoComplete="off"
+                    required
+                  />
+                </label>
+                <p className="helper-text">
+                  Entering your address will allow us to send you electronic payments.
+                </p>
+
+                <label>
+                  Address Line 1 *
+                  <input
+                    value={formData.addressLine1}
+                    onChange={(event) => updateField("addressLine1", event.target.value)}
+                    placeholder="Recipient's Address Line 1"
+                    required
+                  />
+                </label>
+
+                <label>
+                  Address Line 2
+                  <input
+                    value={formData.addressLine2}
+                    onChange={(event) => updateField("addressLine2", event.target.value)}
+                    placeholder="Recipient's Address Line 2"
+                  />
+                </label>
+
+                <label>
+                  City *
+                  <input
+                    value={formData.city}
+                    onChange={(event) => updateField("city", event.target.value)}
+                    required
+                  />
+                </label>
+
+                <div className="row-2">
+                  <label>
+                    {isUnitedStatesAddressCountry ? "State *" : "State / Province / Region"}
+                    {formData.legalCountry === "United States" ? (
+                      <select
+                        value={formData.state}
+                        onChange={(event) => updateField("state", event.target.value)}
+                        required
+                      >
+                        <option value="">Select a state</option>
+                        {usStateOptions.map((stateOption) => (
+                          <option key={stateOption.code} value={stateOption.name}>
+                            {stateOption.name} ({stateOption.code})
+                          </option>
+                        ))}
+                      </select>
+                    ) : (
+                      <input
+                        value={formData.state}
+                        onChange={(event) => updateField("state", event.target.value)}
+                        placeholder="State / Province / Region"
+                      />
+                    )}
+                  </label>
+                  <label>
+                    Postal / ZIP Code *
+                    <input
+                      value={formData.postalCode}
+                      onChange={(event) => updateField("postalCode", event.target.value)}
+                      required
+                    />
+                  </label>
+                </div>
+
+                <div className="actions">
+                  <button
+                    type="button"
+                    className="secondary-btn"
+                    onClick={() => setStep("links")}
+                  >
+                    Back
+                  </button>
+                  <button type="submit" disabled={isPreparingPreviewPdf}>
+                    {isPreparingPreviewPdf ? "Generating Preview..." : "Preview Invoice"}
+                  </button>
+                </div>
+              </form>
+            )}
+
+            {step === "preview" && (
+              <div className="preview-box">
+                <h2>Invoice Preview</h2>
+                <p className="helper-text">
+                  Here is the final invoice layout exactly as PDF output. Review it and submit when ready.
+                </p>
+                <div className="pdf-preview-shell">
+                  {isPreparingPreviewPdf ? (
+                    <p className="helper-text">Generating preview PDF...</p>
+                  ) : previewPdfUrl ? (
+                    <iframe
+                      title="Invoice PDF Preview"
+                      src={previewPdfUrl}
+                      className="pdf-preview-frame"
+                    />
+                  ) : (
+                    <p className="helper-text">Preview PDF is not ready yet. Please click back and try again.</p>
+                  )}
+                </div>
+
+                <div className="actions">
+                  <button
+                    type="button"
+                    className="secondary-btn"
+                    onClick={() => setStep("details")}
+                  >
+                    Edit Details
+                  </button>
+                  <button
+                    type="button"
+                    onClick={submitInvoice}
+                    disabled={isSubmittingInvoice || isPreparingPreviewPdf || !previewPdfUrl}
+                  >
+                    {isSubmittingInvoice ? "Submitting..." : "Submit Invoice"}
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {error && <p className="error-text">{error}</p>}
+            {notice && <p className="notice-text">{notice}</p>}
+          </section>
+        </section>
+
+        <section className="feature-strip">
+          <article>
+            <h3>Country Routing</h3>
+            <p>Country first, then localized tax/currency defaults.</p>
+          </article>
+          <article>
+            <h3>Invoice Preview</h3>
+            <p>Creators can check every field before final PDF generation.</p>
+          </article>
+          <article>
+            <h3>Creator Ready</h3>
+            <p>Clean flow, branded portal, and one-click invoice download.</p>
+          </article>
+        </section>
       </section>
     </main>
   );
