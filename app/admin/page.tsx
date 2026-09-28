@@ -99,12 +99,17 @@ export default function AdminPage() {
         },
         body: JSON.stringify({ status }),
       });
+      const result = (await response.json().catch(() => null)) as { error?: string } | null;
       if (!response.ok) {
-        throw new Error("Update failed");
+        throw new Error(result?.error || "Update failed");
       }
       await fetchData(code);
-    } catch {
-      setError("Failed to update invoice status.");
+    } catch (updateError) {
+      setError(
+        updateError instanceof Error
+          ? updateError.message
+          : "Failed to update invoice status.",
+      );
       setLoading(false);
     }
   };

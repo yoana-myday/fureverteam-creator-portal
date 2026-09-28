@@ -39,6 +39,8 @@ export type CreatorSubmission = {
   approvedAt?: string;
   declinedAt?: string;
   paidAt?: string;
+  feishuRecordId?: string;
+  feishuSyncedAt?: string;
   videos: VideoSubmissionItem[];
   invoiceTotal: number;
 };
@@ -69,6 +71,8 @@ type SubmissionRow = {
   approved_at: Date | string | null;
   declined_at: Date | string | null;
   paid_at: Date | string | null;
+  feishu_record_id: string | null;
+  feishu_synced_at: Date | string | null;
   invoice_total: string | number;
   videos_json: unknown;
 };
@@ -142,6 +146,8 @@ async function ensureSubmissionTable(): Promise<void> {
           approved_at TIMESTAMPTZ NULL,
           declined_at TIMESTAMPTZ NULL,
           paid_at TIMESTAMPTZ NULL,
+          feishu_record_id TEXT NULL,
+          feishu_synced_at TIMESTAMPTZ NULL,
           invoice_total NUMERIC(12, 2) NOT NULL,
           videos_json JSONB NOT NULL
         )
@@ -161,6 +167,14 @@ async function ensureSubmissionTable(): Promise<void> {
       await ddlSql`
         ALTER TABLE creator_submissions
         ADD COLUMN IF NOT EXISTS declined_at TIMESTAMPTZ NULL
+      `;
+      await ddlSql`
+        ALTER TABLE creator_submissions
+        ADD COLUMN IF NOT EXISTS feishu_record_id TEXT NULL
+      `;
+      await ddlSql`
+        ALTER TABLE creator_submissions
+        ADD COLUMN IF NOT EXISTS feishu_synced_at TIMESTAMPTZ NULL
       `;
       await ddlSql`
         CREATE INDEX IF NOT EXISTS creator_submissions_created_at_idx
@@ -222,6 +236,8 @@ function mapRowToSubmission(row: SubmissionRow): CreatorSubmission {
     approvedAt: toIso(row.approved_at),
     declinedAt: toIso(row.declined_at),
     paidAt: toIso(row.paid_at),
+    feishuRecordId: row.feishu_record_id ?? undefined,
+    feishuSyncedAt: toIso(row.feishu_synced_at),
     invoiceTotal: Number(row.invoice_total),
     videos: parseVideos(row.videos_json),
   };
@@ -261,12 +277,57 @@ export async function getAllSubmissions(): Promise<CreatorSubmission[]> {
       approved_at,
       declined_at,
       paid_at,
+      feishu_record_id,
+      feishu_synced_at,
       invoice_total,
       videos_json
     FROM creator_submissions
     ORDER BY created_at DESC
   `;
   return result.rows.map(mapRowToSubmission);
+}
+
+export async function getSubmissionById(id: string): Promise<CreatorSubmission | null> {
+  if (!hasPostgresConfig()) {
+    return getMemoryStore().submissions.find((item) => item.id === id) ?? null;
+  }
+  await ensureSubmissionTable();
+  const result = await sql<SubmissionRow>`
+    SELECT
+      id,
+      created_at,
+      country,
+      full_name,
+      creator_email,
+      company_name,
+      recipient_type,
+      bank_name,
+      bank_country,
+      routing_number,
+      swift_code,
+      account_number,
+      account_type,
+      legal_country,
+      address_line1,
+      address_line2,
+      city,
+      state,
+      postal_code,
+      invoice_number,
+      invoice_date,
+      invoice_status,
+      approved_at,
+      declined_at,
+      paid_at,
+      feishu_record_id,
+      feishu_synced_at,
+      invoice_total,
+      videos_json
+    FROM creator_submissions
+    WHERE id = ${id}
+    LIMIT 1
+  `;
+  return result.rowCount === 0 ? null : mapRowToSubmission(result.rows[0]);
 }
 
 export async function addSubmission(submission: CreatorSubmission): Promise<void> {
@@ -340,6 +401,7 @@ export async function addSubmission(submission: CreatorSubmission): Promise<void
 export async function updateSubmissionStatus(
   id: string,
   nextStatus: InvoiceStatus,
+  options?: { feishuRecordId?: string },
 ): Promise<CreatorSubmission | null> {
   if (!hasPostgresConfig()) {
     const target = getMemoryStore().submissions.find((item) => item.id === id);
@@ -347,6 +409,10 @@ export async function updateSubmissionStatus(
       return null;
     }
     target.invoiceStatus = nextStatus;
+    if (options?.feishuRecordId) {
+      target.feishuRecordId = options.feishuRecordId;
+      target.feishuSyncedAt = new Date().toISOString();
+    }
     if (nextStatus === "approved") {
       target.approvedAt = new Date().toISOString();
       target.declinedAt = undefined;
@@ -403,6 +469,8 @@ export async function updateSubmissionStatus(
       approved_at,
       declined_at,
       paid_at,
+      feishu_record_id,
+      feishu_synced_at,
       invoice_total,
       videos_json
     FROM creator_submissions
@@ -415,6 +483,10 @@ export async function updateSubmissionStatus(
 
   const existing = mapRowToSubmission(existingResult.rows[0]);
   existing.invoiceStatus = nextStatus;
+  if (options?.feishuRecordId) {
+    existing.feishuRecordId = options.feishuRecordId;
+    existing.feishuSyncedAt = new Date().toISOString();
+  }
   if (nextStatus === "approved") {
     existing.approvedAt = new Date().toISOString();
     existing.declinedAt = undefined;
@@ -449,6 +521,8 @@ export async function updateSubmissionStatus(
       approved_at = ${existing.approvedAt ?? null},
       declined_at = ${existing.declinedAt ?? null},
       paid_at = ${existing.paidAt ?? null},
+      feishu_record_id = ${existing.feishuRecordId ?? null},
+      feishu_synced_at = ${existing.feishuSyncedAt ?? null},
       videos_json = ${JSON.stringify(existing.videos)}
     WHERE id = ${id}
   `;
